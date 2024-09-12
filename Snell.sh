@@ -178,6 +178,64 @@ uninstall_snell() {
     echo -e "${GREEN}Snell 卸载成功${RESET}"
 }
 
+# 升级 Snell
+upgrade_snell() {
+    echo -e "${CYAN}正在升级 Snell${RESET}"
+
+    # 检查 Snell 是否已安装
+    if ! check_snell_installed; then
+        echo -e "${RED}Snell 未安装，无法升级。${RESET}"
+        return
+    fi
+
+    # 停止 Snell 服务
+    systemctl stop snell
+
+    # 备份原配置文件
+    cp /etc/snell/snell-server.conf /etc/snell/snell-server.conf.bak
+
+    # 下载最新版本的 Snell
+    ARCH=$(arch)
+    SNELL_URL=""
+    INSTALL_DIR="/usr/local/bin"
+
+    if [[ ${ARCH} == "aarch64" ]]; then
+        SNELL_URL="https://dl.nssurge.com/snell/snell-server-v4.1.0-linux-aarch64.zip"
+    else
+        SNELL_URL="https://dl.nssurge.com/snell/snell-server-v4.1.0-linux-amd64.zip"
+    fi
+
+    wget ${SNELL_URL} -O snell-server.zip
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}下载最新版 Snell 失败。${RESET}"
+        systemctl start snell
+        return
+    fi
+
+    # 解压缩并替换原文件
+    unzip -o snell-server.zip -d ${INSTALL_DIR}
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}解压缩 Snell 失败。${RESET}"
+        systemctl start snell
+        return
+    fi
+
+    # 删除下载的 zip 文件
+    rm snell-server.zip
+
+    # 赋予执行权限
+    chmod +x ${INSTALL_DIR}/snell-server
+
+    # 启动 Snell 服务
+    systemctl start snell
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}启动 Snell 服务失败。${RESET}"
+        return
+    fi
+
+    echo -e "${GREEN}Snell 升级成功${RESET}"
+}
+
 # 显示菜单
 show_menu() {
     clear
@@ -187,6 +245,7 @@ show_menu() {
     echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo "${GREEN}已安装${RESET}"; else echo "${RED}未安装${RESET}"; fi)${RESET}"
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
+    echo "3. 升级 Snell"
     echo "0. 退出"
     echo -e "${GREEN}======================${RESET}"
     read -p "请输入选项编号: " choice
@@ -203,6 +262,9 @@ while true; do
             ;;
         2)
             uninstall_snell
+            ;;
+        3)
+            upgrade_snell
             ;;
         0)
             echo -e "${GREEN}已退出 Snell${RESET}"
