@@ -236,16 +236,108 @@ upgrade_snell() {
     echo -e "${GREEN}Snell 升级成功${RESET}"
 }
 
+# 显示配置
+show_config() {
+    if [ ! -f "${CONF_FILE}" ]; then
+        echo -e "${RED}配置文件不存在。${RESET}"
+        return
+    fi
+
+    echo -e "${GREEN}=== 当前 Snell 配置 ===${RESET}"
+    cat "${CONF_FILE}"
+    echo -e "${GREEN}========================${RESET}"
+}
+
+# 重新生成 PSK
+regenerate_psk() {
+    if [ ! -f "${CONF_FILE}" ]; then
+        echo -e "${RED}配置文件不存在，无法重新生成 PSK。${RESET}"
+        return
+    fi
+
+    NEW_PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
+    sed -i "s/^psk = .*/psk = ${NEW_PSK}/" "${CONF_FILE}"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}更新 PSK 失败。${RESET}"
+        return
+    fi
+
+    systemctl restart snell
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}重启 Snell 服务失败。${RESET}"
+        return
+    fi
+
+    echo -e "${GREEN}PSK 已成功重新生成并应用。${RESET}"
+}
+
+# 重置端口
+reset_port() {
+    if [ ! -f "${CONF_FILE}" ]; then
+        echo -e "${RED}配置文件不存在，无法重置端口。${RESET}"
+        return
+    fi
+
+    NEW_PORT=$(shuf -i 30000-65000 -n 1)
+    sed -i "s/^listen = ::0:[0-9]\+/listen = ::0:${NEW_PORT}/" "${CONF_FILE}"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}更新端口失败。${RESET}"
+        return
+    fi
+
+    systemctl restart snell
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}重启 Snell 服务失败。${RESET}"
+        return
+    fi
+
+    echo -e "${GREEN}端口已成功重置为 ${NEW_PORT} 并应用。${RESET}"
+}
+
+# 配置管理子菜单
+config_menu() {
+    while true; do
+        echo -e "${GREEN}=== 配置管理 ===${RESET}"
+        echo "1. 显示当前配置"
+        echo "2. 重新生成 PSK"
+        echo "3. 重置端口"
+        echo "0. 返回主菜单"
+        echo -e "${GREEN}================${RESET}"
+        read -p "请输入选项编号: " config_choice
+        echo ""
+
+        case "${config_choice}" in
+            1)
+                show_config
+                ;;
+            2)
+                regenerate_psk
+                ;;
+            3)
+                reset_port
+                ;;
+            0)
+                break
+                ;;
+            *)
+                echo -e "${RED}无效的选项${RESET}"
+                ;;
+        esac
+        read -p "按 enter 键继续..."
+    done
+}
+
 # 显示菜单
 show_menu() {
     clear
     check_snell_installed
     snell_status=$?
     echo -e "${GREEN}=== Snell 管理工具 ===${RESET}"
-    echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo "${GREEN}已安装${RESET}"; else echo "${RED}未安装${RESET}"; fi)${RESET}"
+    echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo \"${GREEN}已安装${RESET}\"; else echo \"${RED}未安装${RESET}\"; fi)${RESET}"
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
     echo "3. 升级 Snell"
+    echo "4. 配置管理"
     echo "0. 退出"
     echo -e "${GREEN}======================${RESET}"
     read -p "请输入选项编号: " choice
@@ -265,6 +357,9 @@ while true; do
             ;;
         3)
             upgrade_snell
+            ;;
+        4)
+            config_menu
             ;;
         0)
             echo -e "${GREEN}已退出 Snell${RESET}"
