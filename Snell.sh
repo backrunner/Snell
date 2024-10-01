@@ -9,6 +9,9 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 RESET='\033[0m'
 
+# 定义 Snell 版本
+SNELL_VERSION="v4.1.1"
+
 # 等待其他 apt 进程完成
 wait_for_apt() {
     while fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
@@ -53,9 +56,9 @@ install_snell() {
     CONF_FILE="${CONF_DIR}/snell-server.conf"
 
     if [[ ${ARCH} == "aarch64" ]]; then
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-v4.1.0-linux-aarch64.zip"
+        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
     else
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-v4.1.0-linux-amd64.zip"
+        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
     fi
 
     # 下载 Snell 服务器文件
@@ -200,9 +203,9 @@ upgrade_snell() {
     INSTALL_DIR="/usr/local/bin"
 
     if [[ ${ARCH} == "aarch64" ]]; then
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-v4.1.0-linux-aarch64.zip"
+        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
     else
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-v4.1.0-linux-amd64.zip"
+        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
     fi
 
     wget ${SNELL_URL} -O snell-server.zip
@@ -333,7 +336,7 @@ show_menu() {
     check_snell_installed
     snell_status=$?
     echo -e "${GREEN}=== Snell 管理工具 ===${RESET}"
-    echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo \"${GREEN}已安装${RESET}\"; else echo \"${RED}未安装${RESET}\"; fi)${RESET}"
+    echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo -e "${GREEN}已安装${RESET}"; else echo -e "${RED}未安装${RESET}"; fi)${RESET}"
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
     echo "3. 升级 Snell"
