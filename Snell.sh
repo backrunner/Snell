@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# 定义脚本版本
+SCRIPT_VERSION="20241008.1"
+
 # 定义颜色代码
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -337,14 +340,15 @@ show_menu() {
     clear
     check_snell_installed
     snell_status=$?
-    echo -e "${GREEN}=== Snell 管理工具 ===${RESET}"
+    echo -e "${GREEN}=== Snell 管理工具 v${SCRIPT_VERSION} ===${RESET}"
     echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo -e "${GREEN}已安装${RESET}"; else echo -e "${RED}未安装${RESET}"; fi)${RESET}"
+    echo -e "Snell 版本: ${SNELL_VERSION}"
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
     echo "3. 升级 Snell"
     echo "4. 配置管理"
     echo "0. 退出"
-    echo -e "${GREEN}======================${RESET}"
+    echo -e "${GREEN}=====================================${RESET}"
     read -p "请输入选项编号: " choice
     echo ""
 }
