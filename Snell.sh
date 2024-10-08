@@ -12,6 +12,10 @@ RESET='\033[0m'
 # 定义 Snell 版本
 SNELL_VERSION="v4.1.1"
 
+# 定义配置目录和文件
+CONF_DIR="/etc/snell"
+CONF_FILE="${CONF_DIR}/snell-server.conf"
+
 # 等待其他 apt 进程完成
 wait_for_apt() {
     while fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
@@ -52,8 +56,6 @@ install_snell() {
     SNELL_URL=""
     INSTALL_DIR="/usr/local/bin"
     SYSTEMD_SERVICE_FILE="/lib/systemd/system/snell.service"
-    CONF_DIR="/etc/snell"
-    CONF_FILE="${CONF_DIR}/snell-server.conf"
 
     if [[ ${ARCH} == "aarch64" ]]; then
         SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
