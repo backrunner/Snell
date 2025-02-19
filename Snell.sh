@@ -588,12 +588,15 @@ while true; do
     case "${choice}" in
         1)
             install_snell
+            read -p "按 enter 键继续..."
             ;;
         2)
             uninstall_snell
+            read -p "按 enter 键继续..."
             ;;
         3)
             upgrade_snell
+            read -p "按 enter 键继续..."
             ;;
         4)
             config_menu
@@ -607,7 +610,7 @@ while true; do
             ;;
         *)
             echo -e "${RED}无效的选项${RESET}"
+            read -p "按 enter 键继续..."
             ;;
     esac
-    read -p "按 enter 键继续..."
 done
