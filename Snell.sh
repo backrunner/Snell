@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 定义脚本版本
-SCRIPT_VERSION="20241008.1"
+SCRIPT_VERSION="20250220"
 
 # 定义颜色代码
 RED='\033[0;31m'
@@ -302,6 +302,60 @@ reset_port() {
     echo -e "${GREEN}端口已成功重置为 ${NEW_PORT} 并应用。${RESET}"
 }
 
+# 修改监听IP
+change_listen_ip() {
+    if [ ! -f "${CONF_FILE}" ]; then
+        echo -e "${RED}配置文件不存在，无法修改监听IP。${RESET}"
+        return
+    fi
+
+    echo -e "${CYAN}当前支持的监听地址格式：${RESET}"
+    echo "1. ::0 (监听所有IPv4和IPv6地址)"
+    echo "2. 0.0.0.0 (仅监听所有IPv4地址)"
+    echo "3. 自定义IP地址"
+
+    read -p "请选择监听地址类型 [1-3]: " ip_choice
+
+    case "${ip_choice}" in
+        1)
+            NEW_IP="::0"
+            ;;
+        2)
+            NEW_IP="0.0.0.0"
+            ;;
+        3)
+            read -p "请输入要监听的IP地址: " NEW_IP
+            # 简单的IP地址格式验证
+            if ! [[ ${NEW_IP} =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && ! [[ ${NEW_IP} =~ ^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$ ]]; then
+                echo -e "${RED}无效的IP地址格式${RESET}"
+                return
+            fi
+            ;;
+        *)
+            echo -e "${RED}无效的选项${RESET}"
+            return
+            ;;
+    esac
+
+    # 获取当前端口号
+    CURRENT_PORT=$(grep "listen" "${CONF_FILE}" | grep -o '[0-9]\+$')
+
+    # 更新配置文件中的监听地址
+    sed -i "s/^listen = .*:/listen = ${NEW_IP}:/" "${CONF_FILE}"
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}更新监听IP失败。${RESET}"
+        return
+    fi
+
+    systemctl restart snell
+    if [ $? -ne 0 ]; then
+        echo -e "${RED}重启 Snell 服务失败。${RESET}"
+        return
+    fi
+
+    echo -e "${GREEN}监听IP已成功修改为 ${NEW_IP} 并应用。${RESET}"
+}
+
 # 配置管理子菜单
 config_menu() {
     while true; do
@@ -309,6 +363,7 @@ config_menu() {
         echo "1. 显示当前配置"
         echo "2. 重新生成 PSK"
         echo "3. 重置端口"
+        echo "4. 修改监听IP"
         echo "0. 返回主菜单"
         echo -e "${GREEN}================${RESET}"
         read -p "请输入选项编号: " config_choice
@@ -323,6 +378,9 @@ config_menu() {
                 ;;
             3)
                 reset_port
+                ;;
+            4)
+                change_listen_ip
                 ;;
             0)
                 break
