@@ -314,20 +314,64 @@ reset_port() {
     echo -e "${GREEN}端口已成功重置为 ${NEW_PORT} 并应用。${RESET}"
 }
 
-# 修改监听IP
+# 获取本机网卡IP地址列表
+get_network_interfaces() {
+    # 获取所有网卡的IPv4地址
+    local ipv4_addresses=$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1')
+    
+    # 获取所有网卡的IPv6地址
+    local ipv6_addresses=$(ip -6 addr show | grep -oP '(?<=inet6\s)[0-9a-fA-F:]+' | grep -v '^fe80' | grep -v '^::1$')
+    
+    # 获取公网IP
+    local public_ip=$(curl -s http://checkip.amazonaws.com)
+    
+    echo -e "${CYAN}可用的IP地址：${RESET}"
+    echo "1. ::0 (监听所有IPv4和IPv6地址)"
+    echo "2. 0.0.0.0 (仅监听所有IPv4地址)"
+    
+    local option_num=3
+    
+    # 显示公网IP
+    if [ ! -z "${public_ip}" ]; then
+        echo "${option_num}. ${public_ip} (公网IP)"
+        PUBLIC_IP_OPTION=${option_num}
+        option_num=$((option_num + 1))
+    fi
+    
+    # 显示本地IPv4地址
+    if [ ! -z "${ipv4_addresses}" ]; then
+        echo -e "\n本地IPv4地址："
+        while IFS= read -r ip; do
+            echo "${option_num}. ${ip}"
+            option_num=$((option_num + 1))
+        done <<< "${ipv4_addresses}"
+    fi
+    
+    # 显示本地IPv6地址
+    if [ ! -z "${ipv6_addresses}" ]; then
+        echo -e "\n本地IPv6地址："
+        while IFS= read -r ip; do
+            echo "${option_num}. ${ip}"
+            option_num=$((option_num + 1))
+        done <<< "${ipv6_addresses}"
+    fi
+    
+    echo "$((option_num)). 自定义IP地址"
+    
+    LAST_OPTION=${option_num}
+}
+
+# 修改监听IP（更新后的版本）
 change_listen_ip() {
     if [ ! -f "${CONF_FILE}" ]; then
         echo -e "${RED}配置文件不存在，无法修改监听IP。${RESET}"
         return
     fi
 
-    echo -e "${CYAN}当前支持的监听地址格式：${RESET}"
-    echo "1. ::0 (监听所有IPv4和IPv6地址)"
-    echo "2. 0.0.0.0 (仅监听所有IPv4地址)"
-    echo "3. 自定义IP地址"
-
-    read -p "请选择监听地址类型 [1-3]: " ip_choice
-
+    get_network_interfaces
+    
+    read -p "请选择监听地址类型 [1-${LAST_OPTION}]: " ip_choice
+    
     case "${ip_choice}" in
         1)
             NEW_IP="::0"
@@ -335,7 +379,10 @@ change_listen_ip() {
         2)
             NEW_IP="0.0.0.0"
             ;;
-        3)
+        ${PUBLIC_IP_OPTION})
+            NEW_IP=$(curl -s http://checkip.amazonaws.com)
+            ;;
+        ${LAST_OPTION})
             read -p "请输入要监听的IP地址: " NEW_IP
             # 简单的IP地址格式验证
             if ! [[ ${NEW_IP} =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && ! [[ ${NEW_IP} =~ ^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$ ]]; then
@@ -344,14 +391,25 @@ change_listen_ip() {
             fi
             ;;
         *)
-            echo -e "${RED}无效的选项${RESET}"
-            return
+            if [ "${ip_choice}" -gt 2 ] && [ "${ip_choice}" -lt "${LAST_OPTION}" ]; then
+                # 获取选择的IP地址
+                local selected_ip=$(get_ip_by_option "${ip_choice}")
+                if [ ! -z "${selected_ip}" ]; then
+                    NEW_IP="${selected_ip}"
+                else
+                    echo -e "${RED}无效的选项${RESET}"
+                    return
+                fi
+            else
+                echo -e "${RED}无效的选项${RESET}"
+                return
+            fi
             ;;
     esac
 
     # 获取当前端口号
     CURRENT_PORT=$(grep "listen" "${CONF_FILE}" | grep -o '[0-9]\+$')
-
+    
     # 更新配置文件中的监听地址
     sed -i "s/^listen = .*:/listen = ${NEW_IP}:/" "${CONF_FILE}"
     if [ $? -ne 0 ]; then
@@ -405,6 +463,60 @@ config_menu() {
     done
 }
 
+# 服务管理函数
+manage_service() {
+    while true; do
+        echo -e "${GREEN}=== Snell 服务管理 ===${RESET}"
+        echo "1. 启动服务"
+        echo "2. 停止服务"
+        echo "3. 重启服务"
+        echo "4. 查看服务状态"
+        echo "0. 返回主菜单"
+        echo -e "${GREEN}==================${RESET}"
+        
+        read -p "请选择操作 [0-4]: " service_choice
+        echo ""
+        
+        case "${service_choice}" in
+            1)
+                systemctl start snell
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}Snell 服务已启动${RESET}"
+                else
+                    echo -e "${RED}启动 Snell 服务失败${RESET}"
+                fi
+                ;;
+            2)
+                systemctl stop snell
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}Snell 服务已停止${RESET}"
+                else
+                    echo -e "${RED}停止 Snell 服务失败${RESET}"
+                fi
+                ;;
+            3)
+                systemctl restart snell
+                if [ $? -eq 0 ]; then
+                    echo -e "${GREEN}Snell 服务已重启${RESET}"
+                else
+                    echo -e "${RED}重启 Snell 服务失败${RESET}"
+                fi
+                ;;
+            4)
+                echo -e "${CYAN}Snell 服务状态：${RESET}"
+                systemctl status snell
+                ;;
+            0)
+                break
+                ;;
+            *)
+                echo -e "${RED}无效的选项${RESET}"
+                ;;
+        esac
+        read -p "按 enter 键继续..."
+    done
+}
+
 # 显示菜单
 show_menu() {
     clear
@@ -417,6 +529,7 @@ show_menu() {
     echo "2. 卸载 Snell"
     echo "3. 升级 Snell"
     echo "4. 配置管理"
+    echo "5. 服务管理"
     echo "0. 退出"
     echo -e "${GREEN}=====================================${RESET}"
     read -p "请输入选项编号: " choice
@@ -439,6 +552,9 @@ while true; do
             ;;
         4)
             config_menu
+            ;;
+        5)
+            manage_service
             ;;
         0)
             echo -e "${GREEN}已退出 Snell${RESET}"
