@@ -286,7 +286,19 @@ reset_port() {
         return
     fi
 
-    NEW_PORT=$(shuf -i 30000-65000 -n 1)
+    read -p "请输入新端口号 (1-65535，输入0或直接回车将随机生成): " INPUT_PORT
+
+    # 验证输入的端口号
+    if [[ -z "${INPUT_PORT}" ]] || [[ "${INPUT_PORT}" == "0" ]]; then
+        NEW_PORT=$(shuf -i 30000-65000 -n 1)
+        echo -e "${YELLOW}将使用随机生成的端口: ${NEW_PORT}${RESET}"
+    elif ! [[ "${INPUT_PORT}" =~ ^[0-9]+$ ]] || [ "${INPUT_PORT}" -lt 1 ] || [ "${INPUT_PORT}" -gt 65535 ]; then
+        echo -e "${RED}无效的端口号，端口号必须在 1-65535 之间${RESET}"
+        return
+    else
+        NEW_PORT="${INPUT_PORT}"
+    fi
+
     sed -i "s/^listen = ::0:[0-9]\+/listen = ::0:${NEW_PORT}/" "${CONF_FILE}"
     if [ $? -ne 0 ]; then
         echo -e "${RED}更新端口失败。${RESET}"
