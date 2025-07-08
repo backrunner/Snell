@@ -179,8 +179,23 @@ EOF
     # 获取IP所在国家
     IP_COUNTRY=$(curl -s http://ipinfo.io/${HOST_IP}/country)
 
+    # 根据版本号确定配置中的 version 字段
+    if [[ ${SNELL_VERSION} == v5* ]]; then
+        VERSION_NUM="5"
+    else
+        VERSION_NUM="4"
+    fi
+
     echo -e "${GREEN}Snell 安装成功${RESET}"
-    echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${RANDOM_PORT}, psk = ${RANDOM_PSK}, version = 4, reuse = true, tfo = true"
+
+    # 如果是v5版本，提示用户检查客户端兼容性
+    if [[ ${SNELL_VERSION} == v5* ]]; then
+        echo -e "${YELLOW}注意：您选择了 Snell v5 测试版，请检查您的客户端是否支持 v5 协议。${RESET}"
+        echo -e "${YELLOW}如果客户端不支持 v5，可以将下面配置中的 version = 5 改为 version = 4${RESET}"
+        echo ""
+    fi
+
+    echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${RANDOM_PORT}, psk = ${RANDOM_PSK}, version = ${VERSION_NUM}, reuse = true, tfo = true"
 }
 
 # 卸载 Snell
