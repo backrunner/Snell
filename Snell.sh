@@ -12,8 +12,10 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 RESET='\033[0m'
 
-# 定义 Snell 版本
-SNELL_VERSION="v4.1.1"
+# 定义 Snell 版本选项
+SNELL_VERSION_4="v4.1.1"
+SNELL_VERSION_5="v5.0.0b3"
+SNELL_VERSION=""  # 将由用户选择
 
 # 定义配置目录和文件
 CONF_DIR="/etc/snell"
@@ -42,6 +44,33 @@ check_snell_installed() {
     else
         return 1
     fi
+}
+
+# 选择 Snell 版本
+select_snell_version() {
+    echo -e "${CYAN}请选择 Snell 版本：${RESET}"
+    echo "1. ${SNELL_VERSION_4} (稳定版)"
+    echo "2. ${SNELL_VERSION_5} (测试版)"
+    echo ""
+
+    while true; do
+        read -p "请输入选项编号 [1-2]: " version_choice
+        case "${version_choice}" in
+            1)
+                SNELL_VERSION="${SNELL_VERSION_4}"
+                echo -e "${GREEN}已选择版本: ${SNELL_VERSION}${RESET}"
+                break
+                ;;
+            2)
+                SNELL_VERSION="${SNELL_VERSION_5}"
+                echo -e "${GREEN}已选择版本: ${SNELL_VERSION}${RESET}"
+                break
+                ;;
+            *)
+                echo -e "${RED}无效的选项，请输入 1 或 2${RESET}"
+                ;;
+        esac
+    done
 }
 
 # 安装 Snell
@@ -196,6 +225,9 @@ upgrade_snell() {
         return
     fi
 
+    # 选择版本
+    select_snell_version
+
     # 停止 Snell 服务
     systemctl stop snell
 
@@ -215,7 +247,7 @@ upgrade_snell() {
 
     wget ${SNELL_URL} -O snell-server.zip
     if [ $? -ne 0 ]; then
-        echo -e "${RED}下载最新版 Snell 失败。${RESET}"
+        echo -e "${RED}下载版本 ${SNELL_VERSION} 失败。${RESET}"
         systemctl start snell
         return
     fi
@@ -241,7 +273,7 @@ upgrade_snell() {
         return
     fi
 
-    echo -e "${GREEN}Snell 升级成功${RESET}"
+    echo -e "${GREEN}Snell 升级到版本 ${SNELL_VERSION} 成功${RESET}"
 }
 
 # 显示配置
@@ -569,7 +601,11 @@ show_menu() {
     snell_status=$?
     echo -e "${GREEN}=== Snell 管理工具 v${SCRIPT_VERSION} ===${RESET}"
     echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo -e "${GREEN}已安装${RESET}"; else echo -e "${RED}未安装${RESET}"; fi)${RESET}"
-    echo -e "Snell 版本: ${SNELL_VERSION}"
+    if [ ! -z "${SNELL_VERSION}" ]; then
+        echo -e "选择的 Snell 版本: ${SNELL_VERSION}"
+    else
+        echo -e "可用 Snell 版本: ${SNELL_VERSION_4} (稳定版) / ${SNELL_VERSION_5} (测试版)"
+    fi
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
     echo "3. 升级 Snell"
@@ -587,6 +623,7 @@ while true; do
     show_menu
     case "${choice}" in
         1)
+            select_snell_version
             install_snell
             read -p "按 enter 键继续..."
             ;;
@@ -595,6 +632,7 @@ while true; do
             read -p "按 enter 键继续..."
             ;;
         3)
+            select_snell_version
             upgrade_snell
             read -p "按 enter 键继续..."
             ;;
