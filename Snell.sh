@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 定义脚本版本
-SCRIPT_VERSION="20250220"
+SCRIPT_VERSION="20250708"
 
 # 定义颜色代码
 RED='\033[0;31m'
