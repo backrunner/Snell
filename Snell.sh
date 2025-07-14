@@ -14,7 +14,7 @@ RESET='\033[0m'
 
 # 定义 Snell 版本选项
 SNELL_VERSION_4="v4.1.1"
-SNELL_VERSION_5="v5.0.0b3"
+SNELL_VERSION_5="v5.0.0"
 SNELL_VERSION=""  # 将由用户选择
 
 # 定义配置目录和文件
@@ -49,8 +49,8 @@ check_snell_installed() {
 # 选择 Snell 版本
 select_snell_version() {
     echo -e "${CYAN}请选择 Snell 版本：${RESET}"
-    echo "1. ${SNELL_VERSION_4} (稳定版)"
-    echo "2. ${SNELL_VERSION_5} (测试版)"
+    echo "1. ${SNELL_VERSION_4}"
+    echo "2. ${SNELL_VERSION_5}"
     echo ""
 
     while true; do
