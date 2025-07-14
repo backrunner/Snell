@@ -12,14 +12,57 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 RESET='\033[0m'
 
-# 定义 Snell 版本选项
-SNELL_VERSION_4="v4.1.1"
-SNELL_VERSION_5="v5.0.0"
-SNELL_VERSION=""  # 将由用户选择
+SNELL_VERSION="v5.0.0"
 
 # 定义配置目录和文件
 CONF_DIR="/etc/snell"
 CONF_FILE="${CONF_DIR}/snell-server.conf"
+
+# 定义安装相关变量
+LOCAL_ZIP_FILE=""
+
+# 显示帮助信息
+show_help() {
+    echo -e "${GREEN}Snell 管理工具 v${SCRIPT_VERSION}${RESET}"
+    echo ""
+    echo "用法："
+    echo "  $0                    # 启动交互式菜单"
+    echo "  $0 -i <zip文件>       # 直接安装本地zip文件"
+    echo "  $0 -h                 # 显示此帮助信息"
+    echo ""
+    echo "示例："
+    echo "  $0 -i snell-server-v5.0.0-linux-amd64.zip"
+    echo ""
+}
+
+# 解析命令行参数
+parse_arguments() {
+    while [[ $# -gt 0 ]]; do
+        case $1 in
+            -i|--install)
+                LOCAL_ZIP_FILE="$2"
+                if [[ ! -f "$LOCAL_ZIP_FILE" ]]; then
+                    echo -e "${RED}错误：文件 '$LOCAL_ZIP_FILE' 不存在${RESET}"
+                    exit 1
+                fi
+                if [[ ! "$LOCAL_ZIP_FILE" =~ \.zip$ ]]; then
+                    echo -e "${RED}错误：文件必须是 .zip 格式${RESET}"
+                    exit 1
+                fi
+                shift 2
+                ;;
+            -h|--help)
+                show_help
+                exit 0
+                ;;
+            *)
+                echo -e "${RED}未知参数: $1${RESET}"
+                show_help
+                exit 1
+                ;;
+        esac
+    done
+}
 
 # 等待其他 apt 进程完成
 wait_for_apt() {
@@ -46,36 +89,9 @@ check_snell_installed() {
     fi
 }
 
-# 选择 Snell 版本
-select_snell_version() {
-    echo -e "${CYAN}请选择 Snell 版本：${RESET}"
-    echo "1. ${SNELL_VERSION_4}"
-    echo "2. ${SNELL_VERSION_5}"
-    echo ""
-
-    while true; do
-        read -p "请输入选项编号 [1-2]: " version_choice
-        case "${version_choice}" in
-            1)
-                SNELL_VERSION="${SNELL_VERSION_4}"
-                echo -e "${GREEN}已选择版本: ${SNELL_VERSION}${RESET}"
-                break
-                ;;
-            2)
-                SNELL_VERSION="${SNELL_VERSION_5}"
-                echo -e "${GREEN}已选择版本: ${SNELL_VERSION}${RESET}"
-                break
-                ;;
-            *)
-                echo -e "${RED}无效的选项，请输入 1 或 2${RESET}"
-                ;;
-        esac
-    done
-}
-
-# 安装 Snell
+# 安装 Snell（支持本地文件和在线下载）
 install_snell() {
-    echo -e "${CYAN}正在安装 Snell${RESET}"
+    echo -e "${CYAN}正在安装 Snell ${SNELL_VERSION}${RESET}"
 
     # 等待其他 apt 进程完成
     wait_for_apt
@@ -83,23 +99,33 @@ install_snell() {
     # 安装必要的软件包
     apt update && apt install -y wget unzip
 
-    # 下载 Snell 服务器文件
     ARCH=$(arch)
-    SNELL_URL=""
     INSTALL_DIR="/usr/local/bin"
     SYSTEMD_SERVICE_FILE="/lib/systemd/system/snell.service"
 
-    if [[ ${ARCH} == "aarch64" ]]; then
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
+    # 判断是使用本地文件还是在线下载
+    if [[ -n "$LOCAL_ZIP_FILE" ]]; then
+        echo -e "${CYAN}使用本地文件: $LOCAL_ZIP_FILE${RESET}"
+        cp "$LOCAL_ZIP_FILE" snell-server.zip
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}复制本地文件失败。${RESET}"
+            exit 1
+        fi
     else
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
-    fi
+        # 在线下载 Snell 服务器文件
+        SNELL_URL=""
+        if [[ ${ARCH} == "aarch64" ]]; then
+            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
+        else
+            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
+        fi
 
-    # 下载 Snell 服务器文件
-    wget ${SNELL_URL} -O snell-server.zip
-    if [ $? -ne 0 ]; then
-        echo -e "${RED}下载 Snell 失败。${RESET}"
-        exit 1
+        echo -e "${CYAN}正在下载 ${SNELL_URL}${RESET}"
+        wget ${SNELL_URL} -O snell-server.zip
+        if [ $? -ne 0 ]; then
+            echo -e "${RED}下载 Snell 失败。${RESET}"
+            exit 1
+        fi
     fi
 
     # 解压缩文件到指定目录
@@ -179,23 +205,14 @@ EOF
     # 获取IP所在国家
     IP_COUNTRY=$(curl -s http://ipinfo.io/${HOST_IP}/country)
 
-    # 根据版本号确定配置中的 version 字段
-    if [[ ${SNELL_VERSION} == v5* ]]; then
-        VERSION_NUM="5"
-    else
-        VERSION_NUM="4"
-    fi
+    echo -e "${GREEN}Snell ${SNELL_VERSION} 安装成功${RESET}"
 
-    echo -e "${GREEN}Snell 安装成功${RESET}"
+    # 显示 v5 版本的客户端兼容性警告
+    echo -e "${YELLOW}注意：您安装了 Snell v5，请检查您的客户端是否支持 v5 协议。${RESET}"
+    echo -e "${YELLOW}如果客户端不支持 v5，可以将下面配置中的 version = 5 改为 version = 4${RESET}"
+    echo ""
 
-    # 如果是v5版本，提示用户检查客户端兼容性
-    if [[ ${SNELL_VERSION} == v5* ]]; then
-        echo -e "${YELLOW}注意：您选择了 Snell v5 测试版，请检查您的客户端是否支持 v5 协议。${RESET}"
-        echo -e "${YELLOW}如果客户端不支持 v5，可以将下面配置中的 version = 5 改为 version = 4${RESET}"
-        echo ""
-    fi
-
-    echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${RANDOM_PORT}, psk = ${RANDOM_PSK}, version = ${VERSION_NUM}, reuse = true, tfo = true"
+    echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${RANDOM_PORT}, psk = ${RANDOM_PSK}, version = 5, reuse = true, tfo = true"
 }
 
 # 卸载 Snell
@@ -232,16 +249,13 @@ uninstall_snell() {
 
 # 升级 Snell
 upgrade_snell() {
-    echo -e "${CYAN}正在升级 Snell${RESET}"
+    echo -e "${CYAN}正在升级 Snell 到 ${SNELL_VERSION}${RESET}"
 
     # 检查 Snell 是否已安装
     if ! check_snell_installed; then
         echo -e "${RED}Snell 未安装，无法升级。${RESET}"
         return
     fi
-
-    # 选择版本
-    select_snell_version
 
     # 停止 Snell 服务
     systemctl stop snell
@@ -616,11 +630,7 @@ show_menu() {
     snell_status=$?
     echo -e "${GREEN}=== Snell 管理工具 v${SCRIPT_VERSION} ===${RESET}"
     echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo -e "${GREEN}已安装${RESET}"; else echo -e "${RED}未安装${RESET}"; fi)${RESET}"
-    if [ ! -z "${SNELL_VERSION}" ]; then
-        echo -e "选择的 Snell 版本: ${SNELL_VERSION}"
-    else
-        echo -e "可用 Snell 版本: ${SNELL_VERSION_4} (稳定版) / ${SNELL_VERSION_5} (测试版)"
-    fi
+    echo -e "Snell 版本: ${SNELL_VERSION}"
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
     echo "3. 升级 Snell"
@@ -634,11 +644,20 @@ show_menu() {
 
 # 主循环
 check_root
+parse_arguments "$@"
+
+# 如果指定了本地zip文件，直接安装
+if [[ -n "$LOCAL_ZIP_FILE" ]]; then
+    echo -e "${CYAN}检测到本地安装文件，开始安装...${RESET}"
+    install_snell
+    exit 0
+fi
+
+# 否则进入交互式菜单
 while true; do
     show_menu
     case "${choice}" in
         1)
-            select_snell_version
             install_snell
             read -p "按 enter 键继续..."
             ;;
@@ -647,7 +666,6 @@ while true; do
             read -p "按 enter 键继续..."
             ;;
         3)
-            select_snell_version
             upgrade_snell
             read -p "按 enter 键继续..."
             ;;
