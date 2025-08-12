@@ -399,11 +399,25 @@ install_snell() {
     else
         # 在线下载 Snell 服务器文件
         SNELL_URL=""
-        if [[ ${ARCH} == "aarch64" ]]; then
-            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
-        else
-            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
-        fi
+        case "${ARCH}" in
+            "x86_64"|"amd64")
+                SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
+                ;;
+            "i386"|"i686")
+                SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-i386.zip"
+                ;;
+            "aarch64"|"arm64")
+                SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
+                ;;
+            "armv7l"|"armv7"|"arm")
+                SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-armv7l.zip"
+                ;;
+            *)
+                echo -e "${RED}不支持的架构: ${ARCH}${RESET}"
+                echo -e "${YELLOW}支持的架构: x86_64, i386, aarch64, armv7l${RESET}"
+                exit 1
+                ;;
+        esac
 
         echo -e "${CYAN}正在下载 ${SNELL_URL}${RESET}"
         wget ${SNELL_URL} -O snell-server.zip
@@ -560,11 +574,26 @@ upgrade_snell() {
     SNELL_URL=""
     INSTALL_DIR="/usr/local/bin"
 
-    if [[ ${ARCH} == "aarch64" ]]; then
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
-    else
-        SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
-    fi
+    case "${ARCH}" in
+        "x86_64"|"amd64")
+            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
+            ;;
+        "i386"|"i686")
+            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-i386.zip"
+            ;;
+        "aarch64"|"arm64")
+            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
+            ;;
+        "armv7l"|"armv7"|"arm")
+            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-armv7l.zip"
+            ;;
+        *)
+            echo -e "${RED}不支持的架构: ${ARCH}${RESET}"
+            echo -e "${YELLOW}支持的架构: x86_64, i386, aarch64, armv7l${RESET}"
+            start_service
+            return
+            ;;
+    esac
 
     wget ${SNELL_URL} -O snell-server.zip
     if [ $? -ne 0 ]; then
