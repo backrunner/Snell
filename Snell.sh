@@ -56,7 +56,7 @@ depend() {
 }
 
 start_pre() {
-    checkpath --directory --owner \$command_user:\$command_group --mode 0755 /var/run
+    checkpath --directory --owner \$command_user:\$command_group --mode 0755 /run
 }
 EOF
 
@@ -68,7 +68,7 @@ create_systemd_service() {
     local install_dir="$1"
     local conf_file="$2"
     local systemd_service_file="/lib/systemd/system/snell.service"
-    
+
     cat > ${systemd_service_file} << EOF
 [Unit]
 Description=Snell Proxy Service
