@@ -21,6 +21,202 @@ CONF_FILE="${CONF_DIR}/snell-server.conf"
 # 定义安装相关变量
 LOCAL_ZIP_FILE=""
 
+# 检测初始化系统类型
+detect_init_system() {
+    if [ -d /run/systemd/system ]; then
+        echo "systemd"
+    elif command -v rc-service &> /dev/null; then
+        echo "openrc"
+    else
+        echo "unknown"
+    fi
+}
+
+# 创建 OpenRC 服务文件
+create_openrc_service() {
+    local install_dir="$1"
+    local conf_file="$2"
+    local openrc_service_file="/etc/init.d/snell"
+
+    cat > ${openrc_service_file} << EOF
+#!/sbin/openrc-run
+
+name="snell"
+description="Snell Proxy Service"
+command="${install_dir}/snell-server"
+command_args="-c ${conf_file}"
+command_user="nobody"
+command_group="nogroup"
+pidfile="/var/run/snell.pid"
+command_background="yes"
+
+depend() {
+    need net
+    after firewall
+}
+
+start_pre() {
+    checkpath --directory --owner \$command_user:\$command_group --mode 0755 /var/run
+}
+EOF
+
+    chmod +x ${openrc_service_file}
+}
+
+# 创建 Systemd 服务文件
+create_systemd_service() {
+    local install_dir="$1"
+    local conf_file="$2"
+    local systemd_service_file="/lib/systemd/system/snell.service"
+    
+    cat > ${systemd_service_file} << EOF
+[Unit]
+Description=Snell Proxy Service
+After=network.target
+
+[Service]
+Type=simple
+User=nobody
+Group=nogroup
+LimitNOFILE=32768
+ExecStart=${install_dir}/snell-server -c ${conf_file}
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+StandardOutput=syslog
+StandardError=syslog
+SyslogIdentifier=snell-server
+
+[Install]
+WantedBy=multi-user.target
+EOF
+}
+
+# 启动服务（支持 systemd 和 OpenRC）
+start_service() {
+    local init_system=$(detect_init_system)
+    
+    case "$init_system" in
+        "systemd")
+            systemctl start snell
+            ;;
+        "openrc")
+            rc-service snell start
+            ;;
+        *)
+            echo -e "${RED}不支持的初始化系统${RESET}"
+            return 1
+            ;;
+    esac
+}
+
+# 停止服务（支持 systemd 和 OpenRC）
+stop_service() {
+    local init_system=$(detect_init_system)
+    
+    case "$init_system" in
+        "systemd")
+            systemctl stop snell
+            ;;
+        "openrc")
+            rc-service snell stop
+            ;;
+        *)
+            echo -e "${RED}不支持的初始化系统${RESET}"
+            return 1
+            ;;
+    esac
+}
+
+# 重启服务（支持 systemd 和 OpenRC）
+restart_service() {
+    local init_system=$(detect_init_system)
+    
+    case "$init_system" in
+        "systemd")
+            systemctl restart snell
+            ;;
+        "openrc")
+            rc-service snell restart
+            ;;
+        *)
+            echo -e "${RED}不支持的初始化系统${RESET}"
+            return 1
+            ;;
+    esac
+}
+
+# 启用开机自启（支持 systemd 和 OpenRC）
+enable_service() {
+    local init_system=$(detect_init_system)
+    
+    case "$init_system" in
+        "systemd")
+            systemctl enable snell
+            ;;
+        "openrc")
+            rc-update add snell default
+            ;;
+        *)
+            echo -e "${RED}不支持的初始化系统${RESET}"
+            return 1
+            ;;
+    esac
+}
+
+# 禁用开机自启（支持 systemd 和 OpenRC）
+disable_service() {
+    local init_system=$(detect_init_system)
+    
+    case "$init_system" in
+        "systemd")
+            systemctl disable snell
+            ;;
+        "openrc")
+            rc-update del snell default
+            ;;
+        *)
+            echo -e "${RED}不支持的初始化系统${RESET}"
+            return 1
+            ;;
+    esac
+}
+
+# 检查服务状态（支持 systemd 和 OpenRC）
+service_status() {
+    local init_system=$(detect_init_system)
+    
+    case "$init_system" in
+        "systemd")
+            systemctl status snell
+            ;;
+        "openrc")
+            rc-service snell status
+            ;;
+        *)
+            echo -e "${RED}不支持的初始化系统${RESET}"
+            return 1
+            ;;
+    esac
+}
+
+# 重载服务配置（支持 systemd 和 OpenRC）
+reload_service_config() {
+    local init_system=$(detect_init_system)
+    
+    case "$init_system" in
+        "systemd")
+            systemctl daemon-reload
+            ;;
+        "openrc")
+            # OpenRC 不需要重载配置
+            return 0
+            ;;
+        *)
+            echo -e "${RED}不支持的初始化系统${RESET}"
+            return 1
+            ;;
+    esac
+}
+
 # 显示帮助信息
 show_help() {
     echo -e "${GREEN}Snell 管理工具 v${SCRIPT_VERSION}${RESET}"
@@ -64,12 +260,17 @@ parse_arguments() {
     done
 }
 
-# 等待其他 apt 进程完成
-wait_for_apt() {
-    while fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
-        echo -e "${YELLOW}等待其他 apt 进程完成${RESET}"
-        sleep 1
-    done
+# 等待其他包管理器进程完成
+wait_for_package_manager() {
+    if command -v apt &> /dev/null; then
+        while fuser /var/lib/dpkg/lock >/dev/null 2>&1; do
+            echo -e "${YELLOW}等待其他 apt 进程完成${RESET}"
+            sleep 1
+        done
+    elif command -v apk &> /dev/null; then
+        # Alpine 使用 apk，不需要等待锁定
+        return 0
+    fi
 }
 
 # 检查是否以 root 权限运行
@@ -93,15 +294,25 @@ check_snell_installed() {
 install_snell() {
     echo -e "${CYAN}正在安装 Snell ${SNELL_VERSION}${RESET}"
 
-    # 等待其他 apt 进程完成
-    wait_for_apt
+    # 等待其他包管理器进程完成
+    wait_for_package_manager
+
+    # 检测初始化系统
+    INIT_SYSTEM=$(detect_init_system)
+    echo -e "${CYAN}检测到初始化系统: ${INIT_SYSTEM}${RESET}"
 
     # 安装必要的软件包
-    apt update && apt install -y wget unzip
+    if command -v apt &> /dev/null; then
+        apt update && apt install -y wget unzip
+    elif command -v apk &> /dev/null; then
+        apk update && apk add --no-cache wget unzip
+    else
+        echo -e "${RED}不支持的包管理器${RESET}"
+        exit 1
+    fi
 
     ARCH=$(arch)
     INSTALL_DIR="/usr/local/bin"
-    SYSTEMD_SERVICE_FILE="/lib/systemd/system/snell.service"
 
     # 判断是使用本地文件还是在线下载
     if [[ -n "$LOCAL_ZIP_FILE" ]]; then
@@ -157,43 +368,36 @@ psk = ${RANDOM_PSK}
 ipv6 = true
 EOF
 
-    # 创建 Systemd 服务文件
-    cat > ${SYSTEMD_SERVICE_FILE} << EOF
-[Unit]
-Description=Snell Proxy Service
-After=network.target
+    # 根据初始化系统创建服务文件
+    case "$INIT_SYSTEM" in
+        "systemd")
+            create_systemd_service ${INSTALL_DIR} ${CONF_FILE}
+            ;;
+        "openrc")
+            create_openrc_service ${INSTALL_DIR} ${CONF_FILE}
+            ;;
+        *)
+            echo -e "${RED}不支持的初始化系统: $INIT_SYSTEM${RESET}"
+            exit 1
+            ;;
+    esac
 
-[Service]
-Type=simple
-User=nobody
-Group=nogroup
-LimitNOFILE=32768
-ExecStart=${INSTALL_DIR}/snell-server -c ${CONF_FILE}
-AmbientCapabilities=CAP_NET_BIND_SERVICE
-StandardOutput=syslog
-StandardError=syslog
-SyslogIdentifier=snell-server
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    # 重载 Systemd 配置
-    systemctl daemon-reload
+    # 重载服务配置
+    reload_service_config
     if [ $? -ne 0 ]; then
-        echo -e "${RED}重载 Systemd 配置失败。${RESET}"
+        echo -e "${RED}重载服务配置失败。${RESET}"
         exit 1
     fi
 
     # 开机自启动 Snell
-    systemctl enable snell
+    enable_service
     if [ $? -ne 0 ]; then
         echo -e "${RED}开机自启动 Snell 失败。${RESET}"
         exit 1
     fi
 
     # 启动 Snell 服务
-    systemctl start snell
+    start_service
     if [ $? -ne 0 ]; then
         echo -e "${RED}启动 Snell 服务失败。${RESET}"
         exit 1
@@ -219,29 +423,43 @@ EOF
 uninstall_snell() {
     echo -e "${CYAN}正在卸载 Snell${RESET}"
 
+    # 检测初始化系统
+    INIT_SYSTEM=$(detect_init_system)
+
     # 停止 Snell 服务
-    systemctl stop snell
+    stop_service
     if [ $? -ne 0 ]; then
         echo -e "${RED}停止 Snell 服务失败。${RESET}"
         exit 1
     fi
 
     # 禁用开机自启动
-    systemctl disable snell
+    disable_service
     if [ $? -ne 0 ]; then
         echo -e "${RED}禁用开机自启动失败。${RESET}"
         exit 1
     fi
 
-    # 删除 Systemd 服务文件
-    rm /lib/systemd/system/snell.service
+    # 根据初始化系统删除服务文件
+    case "$INIT_SYSTEM" in
+        "systemd")
+            rm -f /lib/systemd/system/snell.service
+            ;;
+        "openrc")
+            rm -f /etc/init.d/snell
+            ;;
+        *)
+            echo -e "${YELLOW}未知的初始化系统: $INIT_SYSTEM，跳过服务文件删除${RESET}"
+            ;;
+    esac
+
     if [ $? -ne 0 ]; then
-        echo -e "${RED}删除 Systemd 服务文件失败。${RESET}"
+        echo -e "${RED}删除服务文件失败。${RESET}"
         exit 1
     fi
 
     # 删除安装的文件和目录
-    rm /usr/local/bin/snell-server
+    rm -f /usr/local/bin/snell-server
     rm -rf /etc/snell
 
     echo -e "${GREEN}Snell 卸载成功${RESET}"
@@ -258,7 +476,7 @@ upgrade_snell() {
     fi
 
     # 停止 Snell 服务
-    systemctl stop snell
+    stop_service
 
     # 备份原配置文件
     cp /etc/snell/snell-server.conf /etc/snell/snell-server.conf.bak
@@ -277,7 +495,7 @@ upgrade_snell() {
     wget ${SNELL_URL} -O snell-server.zip
     if [ $? -ne 0 ]; then
         echo -e "${RED}下载版本 ${SNELL_VERSION} 失败。${RESET}"
-        systemctl start snell
+        start_service
         return
     fi
 
@@ -285,7 +503,7 @@ upgrade_snell() {
     unzip -o snell-server.zip -d ${INSTALL_DIR}
     if [ $? -ne 0 ]; then
         echo -e "${RED}解压缩 Snell 失败。${RESET}"
-        systemctl start snell
+        start_service
         return
     fi
 
@@ -296,7 +514,7 @@ upgrade_snell() {
     chmod +x ${INSTALL_DIR}/snell-server
 
     # 启动 Snell 服务
-    systemctl start snell
+    start_service
     if [ $? -ne 0 ]; then
         echo -e "${RED}启动 Snell 服务失败。${RESET}"
         return
@@ -331,7 +549,7 @@ regenerate_psk() {
         return
     fi
 
-    systemctl restart snell
+    restart_service
     if [ $? -ne 0 ]; then
         echo -e "${RED}重启 Snell 服务失败。${RESET}"
         return
@@ -343,7 +561,7 @@ regenerate_psk() {
 # 重启 Snell 服务的辅助函数
 restart_snell_service() {
     echo -e "${CYAN}正在重启 Snell 服务...${RESET}"
-    systemctl restart snell
+    restart_service
     if [ $? -ne 0 ]; then
         echo -e "${RED}重启 Snell 服务失败。${RESET}"
         return 1
@@ -581,7 +799,7 @@ manage_service() {
 
         case "${service_choice}" in
             1)
-                systemctl start snell
+                start_service
                 if [ $? -eq 0 ]; then
                     echo -e "${GREEN}Snell 服务已启动${RESET}"
                 else
@@ -590,7 +808,7 @@ manage_service() {
                 read -p "按 enter 键继续..."
                 ;;
             2)
-                systemctl stop snell
+                stop_service
                 if [ $? -eq 0 ]; then
                     echo -e "${GREEN}Snell 服务已停止${RESET}"
                 else
@@ -599,7 +817,7 @@ manage_service() {
                 read -p "按 enter 键继续..."
                 ;;
             3)
-                systemctl restart snell
+                restart_service
                 if [ $? -eq 0 ]; then
                     echo -e "${GREEN}Snell 服务已重启${RESET}"
                 else
@@ -609,7 +827,7 @@ manage_service() {
                 ;;
             4)
                 echo -e "${CYAN}Snell 服务状态：${RESET}"
-                systemctl status snell
+                service_status
                 read -p "按 enter 键继续..."
                 ;;
             0)
