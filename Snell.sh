@@ -32,11 +32,75 @@ detect_init_system() {
     fi
 }
 
+# 检测发行版类型
+detect_distro() {
+    if [ -f /etc/os-release ]; then
+        . /etc/os-release
+        echo "$ID"
+    elif [ -f /etc/alpine-release ]; then
+        echo "alpine"
+    elif [ -f /etc/debian_version ]; then
+        echo "debian"
+    elif [ -f /etc/redhat-release ]; then
+        if grep -q "CentOS" /etc/redhat-release; then
+            echo "centos"
+        elif grep -q "Red Hat" /etc/redhat-release; then
+            echo "rhel"
+        else
+            echo "rhel"
+        fi
+    elif [ -f /etc/centos-release ]; then
+        echo "centos"
+    else
+        echo "unknown"
+    fi
+}
+
+# 获取适用的用户组
+get_user_group() {
+    local distro=$(detect_distro)
+
+    # 检查nogroup是否存在，如果不存在则使用nobody
+    if getent group nogroup >/dev/null 2>&1; then
+        echo "nobody:nogroup"
+    elif getent group nobody >/dev/null 2>&1; then
+        echo "nobody:nobody"
+    else
+        # 如果都不存在，根据发行版选择
+        case "$distro" in
+            "alpine")
+                echo "nobody:nobody"
+                ;;
+            "debian"|"ubuntu")
+                echo "nobody:nogroup"
+                ;;
+            "centos"|"rhel"|"fedora")
+                echo "nobody:nobody"
+                ;;
+            *)
+                echo "nobody:nobody"
+                ;;
+        esac
+    fi
+}
+
 # 创建 OpenRC 服务文件
 create_openrc_service() {
     local install_dir="$1"
     local conf_file="$2"
     local openrc_service_file="/etc/init.d/snell"
+    local user_group=$(get_user_group)
+    local user=$(echo $user_group | cut -d: -f1)
+    local group=$(echo $user_group | cut -d: -f2)
+    local distro=$(detect_distro)
+
+    # 根据发行版选择pidfile路径
+    local pidfile_path
+    if [ "$distro" = "alpine" ] || [ -d "/run" ]; then
+        pidfile_path="/run/snell.pid"
+    else
+        pidfile_path="/var/run/snell.pid"
+    fi
 
     cat > ${openrc_service_file} << EOF
 #!/sbin/openrc-run
@@ -45,10 +109,12 @@ name="snell"
 description="Snell Proxy Service"
 command="${install_dir}/snell-server"
 command_args="-c ${conf_file}"
-command_user="nobody"
-command_group="nogroup"
-pidfile="/var/run/snell.pid"
+command_user="${user}"
+command_group="${group}"
+pidfile="${pidfile_path}"
 command_background="yes"
+output_log="/var/log/snell.log"
+error_log="/var/log/snell.log"
 
 depend() {
     need net
@@ -56,7 +122,12 @@ depend() {
 }
 
 start_pre() {
-    checkpath --directory --owner \$command_user:\$command_group --mode 0755 /run
+    # 确保运行目录存在
+    if [ ! -d "\$(dirname \$pidfile)" ]; then
+        checkpath --directory --owner root:root --mode 0755 "\$(dirname \$pidfile)"
+    fi
+    # 确保日志文件存在并有正确权限
+    checkpath --file --owner \$command_user:\$command_group --mode 0644 /var/log/snell.log
 }
 EOF
 
@@ -68,6 +139,9 @@ create_systemd_service() {
     local install_dir="$1"
     local conf_file="$2"
     local systemd_service_file="/lib/systemd/system/snell.service"
+    local user_group=$(get_user_group)
+    local user=$(echo $user_group | cut -d: -f1)
+    local group=$(echo $user_group | cut -d: -f2)
 
     cat > ${systemd_service_file} << EOF
 [Unit]
@@ -76,8 +150,8 @@ After=network.target
 
 [Service]
 Type=simple
-User=nobody
-Group=nogroup
+User=${user}
+Group=${group}
 LimitNOFILE=32768
 ExecStart=${install_dir}/snell-server -c ${conf_file}
 AmbientCapabilities=CAP_NET_BIND_SERVICE
