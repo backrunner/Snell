@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # 定义脚本版本
-SCRIPT_VERSION="20250708"
+SCRIPT_VERSION="20260211"
 
 # 定义颜色代码
 RED='\033[0;31m'
@@ -12,7 +12,7 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 RESET='\033[0m'
 
-SNELL_VERSION="v5.0.0"
+SNELL_VERSION="v5.0.1"
 
 # 定义配置目录和文件
 CONF_DIR="/etc/snell"
