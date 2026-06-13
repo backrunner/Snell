@@ -1,7 +1,23 @@
-#!/bin/bash
+#!/bin/sh
+
+if [ -z "$BASH_VERSION" ]; then
+    if ! command -v bash >/dev/null 2>&1; then
+        if command -v apk >/dev/null 2>&1; then
+            if [ "$(id -u)" != "0" ]; then
+                echo "请以 root 权限运行此脚本，以便在 Alpine 上安装 bash。"
+                exit 1
+            fi
+            apk update && apk add --no-cache bash || exit 1
+        else
+            echo "请先安装 bash 后再运行此脚本。"
+            exit 1
+        fi
+    fi
+    exec bash "$0" "$@"
+fi
 
 # 定义脚本版本
-SCRIPT_VERSION="20260211"
+SCRIPT_VERSION="20260613"
 
 # 定义颜色代码
 RED='\033[0;31m'
@@ -12,7 +28,10 @@ PURPLE='\033[0;35m'
 CYAN='\033[0;36m'
 RESET='\033[0m'
 
-SNELL_VERSION="v5.0.1"
+SNELL_V5_VERSION="v5.0.1"
+SNELL_V6_VERSION="v6.0.0b2"
+SNELL_VERSION="${SNELL_V5_VERSION}"
+SNELL_PROTOCOL_VERSION="5"
 
 # 定义配置目录和文件
 CONF_DIR="/etc/snell"
@@ -61,9 +80,13 @@ get_user_group() {
     local distro=$(detect_distro)
 
     # 检查nogroup是否存在，如果不存在则使用nobody
-    if getent group nogroup >/dev/null 2>&1; then
+    if command -v getent >/dev/null 2>&1 && getent group nogroup >/dev/null 2>&1; then
         echo "nobody:nogroup"
-    elif getent group nobody >/dev/null 2>&1; then
+    elif command -v getent >/dev/null 2>&1 && getent group nobody >/dev/null 2>&1; then
+        echo "nobody:nobody"
+    elif grep -q '^nogroup:' /etc/group 2>/dev/null; then
+        echo "nobody:nogroup"
+    elif grep -q '^nobody:' /etc/group 2>/dev/null; then
         echo "nobody:nobody"
     else
         # 如果都不存在，根据发行版选择
@@ -109,8 +132,7 @@ name="snell"
 description="Snell Proxy Service"
 command="${install_dir}/snell-server"
 command_args="-c ${conf_file}"
-command_user="${user}"
-command_group="${group}"
+command_user="${user}:${group}"
 pidfile="${pidfile_path}"
 command_background="yes"
 output_log="/var/log/snell.log"
@@ -127,7 +149,7 @@ start_pre() {
         checkpath --directory --owner root:root --mode 0755 "\$(dirname \$pidfile)"
     fi
     # 确保日志文件存在并有正确权限
-    checkpath --file --owner \$command_user:\$command_group --mode 0644 /var/log/snell.log
+    checkpath --file --owner ${user}:${group} --mode 0644 /var/log/snell.log
 }
 EOF
 
@@ -297,11 +319,12 @@ show_help() {
     echo ""
     echo "用法："
     echo "  $0                    # 启动交互式菜单"
-    echo "  $0 -i <zip文件>       # 直接安装本地zip文件"
+    echo "  $0 -i <zip文件>       # 使用本地zip文件安装"
     echo "  $0 -h                 # 显示此帮助信息"
     echo ""
     echo "示例："
-    echo "  $0 -i snell-server-v5.0.0-linux-amd64.zip"
+    echo "  $0 -i snell-server-v5.0.1-linux-amd64.zip"
+    echo "  $0 -i snell-server-v6.0.0b2-linux-amd64.zip"
     echo ""
 }
 
@@ -364,8 +387,63 @@ check_snell_installed() {
     fi
 }
 
+select_snell_version() {
+    local action_name="${1:-安装}"
+
+    while true; do
+        echo -e "${CYAN}请选择要${action_name}的 Snell 版本:${RESET}"
+        echo "1. Snell v5 (${SNELL_V5_VERSION})"
+        echo "2. Snell v6 (${SNELL_V6_VERSION})"
+        read -p "请输入选项编号 [1-2，默认 1]: " version_choice
+
+        case "${version_choice}" in
+            ""|1)
+                SNELL_VERSION="${SNELL_V5_VERSION}"
+                SNELL_PROTOCOL_VERSION="5"
+                return 0
+                ;;
+            2)
+                SNELL_VERSION="${SNELL_V6_VERSION}"
+                SNELL_PROTOCOL_VERSION="6"
+                return 0
+                ;;
+            *)
+                echo -e "${RED}无效的选项${RESET}"
+                ;;
+        esac
+    done
+}
+
+get_snell_download_url() {
+    local arch="$1"
+    local version="$2"
+    local protocol_version="$3"
+
+    case "${arch}" in
+        "x86_64"|"amd64")
+            echo "https://dl.nssurge.com/snell/snell-server-${version}-linux-amd64.zip"
+            ;;
+        "i386"|"i686")
+            echo "https://dl.nssurge.com/snell/snell-server-${version}-linux-i386.zip"
+            ;;
+        "aarch64"|"arm64")
+            echo "https://dl.nssurge.com/snell/snell-server-${version}-linux-aarch64.zip"
+            ;;
+        "armv7l"|"armv7"|"arm")
+            if [ "${protocol_version}" = "6" ]; then
+                return 2
+            fi
+            echo "https://dl.nssurge.com/snell/snell-server-${version}-linux-armv7l.zip"
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 # 安装 Snell（支持本地文件和在线下载）
 install_snell() {
+    select_snell_version "安装"
     echo -e "${CYAN}正在安装 Snell ${SNELL_VERSION}${RESET}"
 
     # 等待其他包管理器进程完成
@@ -377,15 +455,15 @@ install_snell() {
 
     # 安装必要的软件包
     if command -v apt &> /dev/null; then
-        apt update && apt install -y wget unzip
+        apt update && apt install -y wget unzip curl iproute2 coreutils
     elif command -v apk &> /dev/null; then
-        apk update && apk add --no-cache wget unzip
+        apk update && apk add --no-cache bash wget unzip curl iproute2 coreutils
     else
         echo -e "${RED}不支持的包管理器${RESET}"
         exit 1
     fi
 
-    ARCH=$(arch)
+    ARCH=$(uname -m)
     INSTALL_DIR="/usr/local/bin"
 
     # 判断是使用本地文件还是在线下载
@@ -397,27 +475,17 @@ install_snell() {
             exit 1
         fi
     else
-        # 在线下载 Snell 服务器文件
-        SNELL_URL=""
-        case "${ARCH}" in
-            "x86_64"|"amd64")
-                SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
-                ;;
-            "i386"|"i686")
-                SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-i386.zip"
-                ;;
-            "aarch64"|"arm64")
-                SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
-                ;;
-            "armv7l"|"armv7"|"arm")
-                SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-armv7l.zip"
-                ;;
-            *)
-                echo -e "${RED}不支持的架构: ${ARCH}${RESET}"
-                echo -e "${YELLOW}支持的架构: x86_64, i386, aarch64, armv7l${RESET}"
-                exit 1
-                ;;
-        esac
+        SNELL_URL=$(get_snell_download_url "${ARCH}" "${SNELL_VERSION}" "${SNELL_PROTOCOL_VERSION}")
+        url_status=$?
+        if [ ${url_status} -eq 1 ]; then
+            echo -e "${RED}不支持的架构: ${ARCH}${RESET}"
+            echo -e "${YELLOW}支持的架构: x86_64, i386, aarch64, armv7l${RESET}"
+            exit 1
+        elif [ ${url_status} -eq 2 ]; then
+            echo -e "${RED}Snell v6 暂不支持 armv7l/arm 架构。${RESET}"
+            echo -e "${YELLOW}请改选 Snell v5，或使用 x86_64、i386、aarch64 架构安装 v6。${RESET}"
+            exit 1
+        fi
 
         echo -e "${CYAN}正在下载 ${SNELL_URL}${RESET}"
         wget ${SNELL_URL} -O snell-server.zip
@@ -499,12 +567,12 @@ EOF
 
     echo -e "${GREEN}Snell ${SNELL_VERSION} 安装成功${RESET}"
 
-    # 显示 v5 版本的客户端兼容性警告
-    echo -e "${YELLOW}注意：您安装了 Snell v5，请检查您的客户端是否支持 v5 协议。${RESET}"
-    echo -e "${YELLOW}如果客户端不支持 v5，可以将下面配置中的 version = 5 改为 version = 4${RESET}"
+    if [ "${SNELL_PROTOCOL_VERSION}" = "6" ]; then
+        echo -e "${YELLOW}注意：您安装了 Snell v6，请确认客户端已支持 v6 协议。${RESET}"
+    fi
     echo ""
 
-    echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${RANDOM_PORT}, psk = ${RANDOM_PSK}, version = 5, reuse = true, tfo = true"
+    echo "${IP_COUNTRY} = snell, ${HOST_IP}, ${RANDOM_PORT}, psk = ${RANDOM_PSK}, version = ${SNELL_PROTOCOL_VERSION}, reuse = true, tfo = true"
 }
 
 # 卸载 Snell
@@ -555,6 +623,7 @@ uninstall_snell() {
 
 # 升级 Snell
 upgrade_snell() {
+    select_snell_version "升级"
     echo -e "${CYAN}正在升级 Snell 到 ${SNELL_VERSION}${RESET}"
 
     # 检查 Snell 是否已安装
@@ -570,30 +639,22 @@ upgrade_snell() {
     cp /etc/snell/snell-server.conf /etc/snell/snell-server.conf.bak
 
     # 下载最新版本的 Snell
-    ARCH=$(arch)
-    SNELL_URL=""
+    ARCH=$(uname -m)
     INSTALL_DIR="/usr/local/bin"
 
-    case "${ARCH}" in
-        "x86_64"|"amd64")
-            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-amd64.zip"
-            ;;
-        "i386"|"i686")
-            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-i386.zip"
-            ;;
-        "aarch64"|"arm64")
-            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-aarch64.zip"
-            ;;
-        "armv7l"|"armv7"|"arm")
-            SNELL_URL="https://dl.nssurge.com/snell/snell-server-${SNELL_VERSION}-linux-armv7l.zip"
-            ;;
-        *)
-            echo -e "${RED}不支持的架构: ${ARCH}${RESET}"
-            echo -e "${YELLOW}支持的架构: x86_64, i386, aarch64, armv7l${RESET}"
-            start_service
-            return
-            ;;
-    esac
+    SNELL_URL=$(get_snell_download_url "${ARCH}" "${SNELL_VERSION}" "${SNELL_PROTOCOL_VERSION}")
+    url_status=$?
+    if [ ${url_status} -eq 1 ]; then
+        echo -e "${RED}不支持的架构: ${ARCH}${RESET}"
+        echo -e "${YELLOW}支持的架构: x86_64, i386, aarch64, armv7l${RESET}"
+        start_service
+        return
+    elif [ ${url_status} -eq 2 ]; then
+        echo -e "${RED}Snell v6 暂不支持 armv7l/arm 架构。${RESET}"
+        echo -e "${YELLOW}请改选 Snell v5，或使用 x86_64、i386、aarch64 架构安装 v6。${RESET}"
+        start_service
+        return
+    fi
 
     wget ${SNELL_URL} -O snell-server.zip
     if [ $? -ne 0 ]; then
@@ -711,6 +772,8 @@ reset_port() {
 get_network_interfaces() {
     # 初始化数组
     declare -a ip_list
+    declare -a local_ipv4_list
+    declare -a local_ipv6_list
 
     # 添加固定选项
     ip_list+=("::0")  # 监听所有IPv4和IPv6地址
@@ -725,13 +788,19 @@ get_network_interfaces() {
 
     # 获取本地IPv4地址
     while IFS= read -r ip; do
-        ip_list+=("${ip}")
-    done <<< "$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1')"
+        if [ -n "${ip}" ]; then
+            local_ipv4_list+=("${ip}")
+            ip_list+=("${ip}")
+        fi
+    done <<< "$(ip -o -4 addr show | awk '{split($4, addr, "/"); if (addr[1] != "127.0.0.1") print addr[1]}')"
 
     # 获取本地IPv6地址
     while IFS= read -r ip; do
-        ip_list+=("${ip}")
-    done <<< "$(ip -6 addr show | grep -oP '(?<=inet6\s)[0-9a-fA-F:]+' | grep -v '^fe80' | grep -v '^::1$')"
+        if [ -n "${ip}" ]; then
+            local_ipv6_list+=("${ip}")
+            ip_list+=("${ip}")
+        fi
+    done <<< "$(ip -o -6 addr show | awk '{split($4, addr, "/"); if (addr[1] !~ /^fe80/ && addr[1] != "::1") print addr[1]}')"
 
     # 显示IP列表
     echo -e "${CYAN}可用的IP地址：${RESET}"
@@ -745,9 +814,8 @@ get_network_interfaces() {
     fi
 
     # 显示本地IPv4地址
-    local ipv4_start=${option_num}
     local ipv4_count=0
-    while [ ${ipv4_count} -lt $(grep -c '^[0-9]' <<< "$(ip -4 addr show | grep -oP '(?<=inet\s)\d+(\.\d+){3}' | grep -v '127.0.0.1')") ]; do
+    while [ ${ipv4_count} -lt ${#local_ipv4_list[@]} ]; do
         echo "${option_num}. ${ip_list[${option_num}-1]}"
         option_num=$((option_num + 1))
         ipv4_count=$((ipv4_count + 1))
@@ -951,7 +1019,7 @@ show_menu() {
     snell_status=$?
     echo -e "${GREEN}=== Snell 管理工具 v${SCRIPT_VERSION} ===${RESET}"
     echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo -e "${GREEN}已安装${RESET}"; else echo -e "${RED}未安装${RESET}"; fi)${RESET}"
-    echo -e "Snell 版本: ${SNELL_VERSION}"
+    echo -e "可安装版本: v5 (${SNELL_V5_VERSION}) / v6 (${SNELL_V6_VERSION})"
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
     echo "3. 升级 Snell"
