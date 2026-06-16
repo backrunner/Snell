@@ -380,6 +380,10 @@ view_service_logs() {
                 journalctl -u snell -n 100 --no-pager
             elif [ -f /var/log/snell.log ]; then
                 tail -n 100 /var/log/snell.log
+            elif command -v logread >/dev/null 2>&1; then
+                logread 2>/dev/null | tail -n 100
+            elif command -v dmesg >/dev/null 2>&1; then
+                dmesg 2>/dev/null | tail -n 100
             else
                 echo -e "${YELLOW}未找到可用日志来源。${RESET}"
             fi
@@ -389,6 +393,10 @@ view_service_logs() {
                 tail -n 100 /var/log/snell.log
             elif command -v journalctl >/dev/null 2>&1; then
                 journalctl -u snell -n 100 --no-pager
+            elif command -v logread >/dev/null 2>&1; then
+                logread 2>/dev/null | tail -n 100
+            elif command -v dmesg >/dev/null 2>&1; then
+                dmesg 2>/dev/null | tail -n 100
             else
                 echo -e "${YELLOW}未找到可用日志文件 /var/log/snell.log。${RESET}"
             fi
@@ -396,12 +404,33 @@ view_service_logs() {
         *)
             if [ -f /var/log/snell.log ]; then
                 tail -n 100 /var/log/snell.log
+            elif command -v logread >/dev/null 2>&1; then
+                logread 2>/dev/null | tail -n 100
+            elif command -v dmesg >/dev/null 2>&1; then
+                dmesg 2>/dev/null | tail -n 100
             else
                 echo -e "${YELLOW}不支持的初始化系统${RESET}"
             fi
             ;;
     esac
     echo -e "${CYAN}================${RESET}"
+}
+
+# 前台运行一次 Snell，便于排查服务启动失败
+debug_run_snell() {
+    if [ ! -x /usr/local/bin/snell-server ]; then
+        echo -e "${RED}未找到 /usr/local/bin/snell-server。${RESET}"
+        return
+    fi
+
+    if [ ! -f "${CONF_FILE}" ]; then
+        echo -e "${RED}配置文件不存在: ${CONF_FILE}${RESET}"
+        return
+    fi
+
+    echo -e "${YELLOW}即将停止当前 Snell 服务，并以前台方式运行一次。按 Ctrl+C 结束诊断；如返回 shell，请重新运行脚本。${RESET}"
+    stop_service >/dev/null 2>&1
+    /usr/local/bin/snell-server -c "${CONF_FILE}"
 }
 
 # 重载服务配置（支持 systemd 和 OpenRC）
@@ -551,6 +580,14 @@ get_snell_download_url() {
     esac
 }
 
+has_ipv6_support() {
+    if [ -r /proc/sys/net/ipv6/conf/all/disable_ipv6 ] && [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)" = "1" ]; then
+        return 1
+    fi
+
+    [ -f /proc/net/if_inet6 ]
+}
+
 # 安装 Snell（支持本地文件和在线下载）
 install_snell() {
     select_snell_version "安装"
@@ -626,6 +663,15 @@ install_snell() {
     RANDOM_PORT=$(shuf -i 30000-65000 -n 1)
     RANDOM_PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
 
+    if has_ipv6_support; then
+        DEFAULT_LISTEN="::0:${RANDOM_PORT}"
+        DEFAULT_IPV6="true"
+    else
+        DEFAULT_LISTEN="0.0.0.0:${RANDOM_PORT}"
+        DEFAULT_IPV6="false"
+        echo -e "${YELLOW}检测到当前环境不支持 IPv6，已自动使用 IPv4-only 配置。${RESET}"
+    fi
+
     # 创建配置文件目录
     mkdir -p ${CONF_DIR}
 
@@ -633,9 +679,9 @@ install_snell() {
     cat > ${CONF_FILE} << EOF
 [snell-server]
 dns = 1.1.1.1, 8.8.8.8, 2001:4860:4860::8888
-listen = ::0:${RANDOM_PORT}
+listen = ${DEFAULT_LISTEN}
 psk = ${RANDOM_PSK}
-ipv6 = true
+ipv6 = ${DEFAULT_IPV6}
 EOF
 
     # 根据初始化系统创建服务文件
@@ -1077,10 +1123,11 @@ manage_service() {
         echo "3. 重启服务"
         echo "4. 查看服务状态"
         echo "5. 查看服务日志"
+        echo "6. 前台诊断启动"
         echo "0. 返回主菜单"
         echo -e "${GREEN}==================${RESET}"
 
-        read -p "请选择操作 [0-5]: " service_choice
+        read -p "请选择操作 [0-6]: " service_choice
         echo ""
 
         case "${service_choice}" in
@@ -1118,6 +1165,10 @@ manage_service() {
                 ;;
             5)
                 view_service_logs
+                read -p "按 enter 键继续..."
+                ;;
+            6)
+                debug_run_snell
                 read -p "按 enter 键继续..."
                 ;;
             0)
