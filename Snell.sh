@@ -29,7 +29,7 @@ CYAN='\033[0;36m'
 RESET='\033[0m'
 
 SNELL_V5_VERSION="v5.0.1"
-SNELL_V6_VERSION="v6.0.0b2"
+SNELL_V6_VERSION="v6.0.0b3"
 SNELL_VERSION="${SNELL_V5_VERSION}"
 SNELL_PROTOCOL_VERSION="5"
 
@@ -324,7 +324,7 @@ show_help() {
     echo ""
     echo "示例："
     echo "  $0 -i snell-server-v5.0.1-linux-amd64.zip"
-    echo "  $0 -i snell-server-v6.0.0b2-linux-amd64.zip"
+    echo "  $0 -i snell-server-v6.0.0b3-linux-amd64.zip"
     echo ""
 }
 
