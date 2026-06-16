@@ -580,12 +580,82 @@ get_snell_download_url() {
     esac
 }
 
-has_ipv6_support() {
+is_ipv6_address() {
+    [[ "$1" == *:* ]]
+}
+
+is_public_ipv6_address() {
+    local ip="${1,,}"
+
+    ip="${ip%%%*}"
+    if ! is_ipv6_address "${ip}"; then
+        return 1
+    fi
+
+    # Public IPv6 addresses are global unicast addresses under 2000::/3.
+    case "${ip}" in
+        2*|3*)
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+
+    # Exclude non-public ranges that may still appear with global scope.
+    case "${ip}" in
+        2001:db8:*|2001:0db8:*|2002:*)
+            return 1
+            ;;
+    esac
+
+    return 0
+}
+
+list_public_ipv6_addresses() {
     if [ -r /proc/sys/net/ipv6/conf/all/disable_ipv6 ] && [ "$(cat /proc/sys/net/ipv6/conf/all/disable_ipv6 2>/dev/null)" = "1" ]; then
         return 1
     fi
 
-    [ -f /proc/net/if_inet6 ]
+    if command -v ip >/dev/null 2>&1; then
+        while IFS= read -r ipv6_addr; do
+            if is_public_ipv6_address "${ipv6_addr}"; then
+                echo "${ipv6_addr}"
+            fi
+        done <<< "$(ip -o -6 addr show scope global 2>/dev/null | awk '{split($4, addr, "/"); if (addr[1] != "") print addr[1]}')"
+        return 0
+    fi
+
+    if [ -f /proc/net/if_inet6 ]; then
+        awk '
+            {
+                addr = tolower($1)
+                if (addr ~ /^[23]/ && addr !~ /^20010db8/ && addr !~ /^2002/) {
+                    printf "%s:%s:%s:%s:%s:%s:%s:%s\n",
+                        substr(addr, 1, 4), substr(addr, 5, 4), substr(addr, 9, 4), substr(addr, 13, 4),
+                        substr(addr, 17, 4), substr(addr, 21, 4), substr(addr, 25, 4), substr(addr, 29, 4)
+                }
+            }
+        ' /proc/net/if_inet6
+        return 0
+    fi
+
+    return 1
+}
+
+has_public_ipv6() {
+    local ipv6_addr
+
+    ipv6_addr=$(list_public_ipv6_addresses | head -n 1)
+    [ -n "${ipv6_addr}" ]
+}
+
+set_ipv6_config() {
+    local enable_ipv6="$1"
+
+    sed -i '/^ipv6 = /d' "${CONF_FILE}"
+    if [ "${enable_ipv6}" = "true" ]; then
+        echo "ipv6 = true" >> "${CONF_FILE}"
+    fi
 }
 
 # 安装 Snell（支持本地文件和在线下载）
@@ -663,13 +733,13 @@ install_snell() {
     RANDOM_PORT=$(shuf -i 30000-65000 -n 1)
     RANDOM_PSK=$(tr -dc A-Za-z0-9 </dev/urandom | head -c 20)
 
-    if has_ipv6_support; then
+    if has_public_ipv6; then
         DEFAULT_LISTEN="::0:${RANDOM_PORT}"
-        DEFAULT_IPV6="true"
+        ENABLE_IPV6="true"
     else
         DEFAULT_LISTEN="0.0.0.0:${RANDOM_PORT}"
-        DEFAULT_IPV6="false"
-        echo -e "${YELLOW}检测到当前环境不支持 IPv6，已自动使用 IPv4-only 配置。${RESET}"
+        ENABLE_IPV6="false"
+        echo -e "${YELLOW}未检测到公网 IPv6，已自动使用 IPv4-only 配置。${RESET}"
     fi
 
     # 创建配置文件目录
@@ -681,8 +751,11 @@ install_snell() {
 dns = 1.1.1.1, 8.8.8.8, 2001:4860:4860::8888
 listen = ${DEFAULT_LISTEN}
 psk = ${RANDOM_PSK}
-ipv6 = ${DEFAULT_IPV6}
 EOF
+
+    if [ "${ENABLE_IPV6}" = "true" ]; then
+        echo "ipv6 = true" >> "${CONF_FILE}"
+    fi
 
     # 根据初始化系统创建服务文件
     case "$INIT_SYSTEM" in
@@ -915,7 +988,17 @@ reset_port() {
     fi
 
     # 更新配置文件中的端口
-    sed -i "s/^listen = ::0:[0-9]\+/listen = ::0:${NEW_PORT}/" "${CONF_FILE}"
+    CURRENT_LISTEN=$(grep -m 1 "^listen = " "${CONF_FILE}" | sed "s/^listen = //")
+    CURRENT_IP="${CURRENT_LISTEN%:*}"
+    if [ -z "${CURRENT_IP}" ] || [ "${CURRENT_IP}" = "${CURRENT_LISTEN}" ]; then
+        if has_public_ipv6; then
+            CURRENT_IP="::0"
+        else
+            CURRENT_IP="0.0.0.0"
+        fi
+    fi
+
+    sed -i "s|^listen = .*|listen = ${CURRENT_IP}:${NEW_PORT}|" "${CONF_FILE}"
     if [ $? -ne 0 ]; then
         echo -e "${RED}更新端口失败。${RESET}"
         return
@@ -932,69 +1015,63 @@ reset_port() {
 get_network_interfaces() {
     # 初始化数组
     declare -a ip_list
-    declare -a local_ipv4_list
-    declare -a local_ipv6_list
+    PUBLIC_IP_OPTION=""
+    IPV6_AVAILABLE="false"
+
+    if has_public_ipv6; then
+        IPV6_AVAILABLE="true"
+    fi
 
     # 添加固定选项
-    ip_list+=("::0")  # 监听所有IPv4和IPv6地址
+    if [ "${IPV6_AVAILABLE}" = "true" ]; then
+        ip_list+=("::0")  # 监听所有IPv4和IPv6地址
+    fi
     ip_list+=("0.0.0.0")  # 仅监听所有IPv4地址
 
     # 获取公网IP
-    public_ip=$(curl -s http://checkip.amazonaws.com)
-    if [ ! -z "${public_ip}" ]; then
+    public_ip=$(curl -s http://checkip.amazonaws.com | tr -d '[:space:]')
+    if [ -n "${public_ip}" ] && { ! is_ipv6_address "${public_ip}" || is_public_ipv6_address "${public_ip}"; }; then
+        PUBLIC_IP_OPTION=$((${#ip_list[@]} + 1))
         ip_list+=("${public_ip}")
-        PUBLIC_IP_OPTION=3
     fi
 
     # 获取本地IPv4地址
     while IFS= read -r ip; do
         if [ -n "${ip}" ]; then
-            local_ipv4_list+=("${ip}")
             ip_list+=("${ip}")
         fi
     done <<< "$(ip -o -4 addr show | awk '{split($4, addr, "/"); if (addr[1] != "127.0.0.1") print addr[1]}')"
 
-    # 获取本地IPv6地址
-    while IFS= read -r ip; do
-        if [ -n "${ip}" ]; then
-            local_ipv6_list+=("${ip}")
-            ip_list+=("${ip}")
-        fi
-    done <<< "$(ip -o -6 addr show | awk '{split($4, addr, "/"); if (addr[1] !~ /^fe80/ && addr[1] != "::1") print addr[1]}')"
+    # 获取本地公网IPv6地址
+    if [ "${IPV6_AVAILABLE}" = "true" ]; then
+        while IFS= read -r ip; do
+            if [ -n "${ip}" ]; then
+                ip_list+=("${ip}")
+            fi
+        done <<< "$(list_public_ipv6_addresses)"
+    fi
 
     # 显示IP列表
     echo -e "${CYAN}可用的IP地址：${RESET}"
-    echo "1. ${ip_list[0]} (监听所有IPv4和IPv6地址)"
-    echo "2. ${ip_list[1]} (仅监听所有IPv4地址)"
-
-    local option_num=3
-    if [ ! -z "${public_ip}" ]; then
-        echo "${option_num}. ${ip_list[2]} (公网IP)"
-        option_num=$((option_num + 1))
-    fi
-
-    # 显示本地IPv4地址
-    local ipv4_count=0
-    while [ ${ipv4_count} -lt ${#local_ipv4_list[@]} ]; do
-        echo "${option_num}. ${ip_list[${option_num}-1]}"
-        option_num=$((option_num + 1))
-        ipv4_count=$((ipv4_count + 1))
-    done
-
-    # 显示本地IPv6地址
-    if [ $ipv4_count -gt 0 ]; then
-        echo -e "\n本地IPv6地址："
-    fi
-    while [ ${option_num} -lt ${#ip_list[@]} ]; do
-        echo "${option_num}. ${ip_list[${option_num}-1]}"
+    local option_num=1
+    for ip in "${ip_list[@]}"; do
+        if [ "${ip}" = "::0" ]; then
+            echo "${option_num}. ${ip} (监听所有IPv4和IPv6地址)"
+        elif [ "${ip}" = "0.0.0.0" ]; then
+            echo "${option_num}. ${ip} (仅监听所有IPv4地址)"
+        elif [ -n "${PUBLIC_IP_OPTION}" ] && [ "${option_num}" -eq "${PUBLIC_IP_OPTION}" ]; then
+            echo "${option_num}. ${ip} (公网IP)"
+        else
+            echo "${option_num}. ${ip}"
+        fi
         option_num=$((option_num + 1))
     done
 
     echo "${option_num}. 自定义IP地址"
     LAST_OPTION=${option_num}
 
-    # 导出IP列表供其他函数使用
-    export IP_LIST=("${ip_list[@]}")
+    # 保存IP列表供其他函数使用
+    IP_LIST=("${ip_list[@]}")
 }
 
 # 获取指定选项对应的IP地址
@@ -1002,7 +1079,7 @@ get_ip_by_option() {
     local option=$1
 
     # 检查选项是否在有效范围内
-    if [ ${option} -ge 1 ] && [ ${option} -lt ${LAST_OPTION} ]; then
+    if [ "${option}" -ge 1 ] && [ "${option}" -lt "${LAST_OPTION}" ]; then
         echo "${IP_LIST[${option}-1]}"
         return 0
     fi
@@ -1021,49 +1098,53 @@ change_listen_ip() {
 
     read -p "请选择监听地址类型 [1-${LAST_OPTION}]: " ip_choice
 
-    case "${ip_choice}" in
-        1)
-            NEW_IP="::0"
-            ;;
-        2)
-            NEW_IP="0.0.0.0"
-            ;;
-        ${PUBLIC_IP_OPTION})
-            NEW_IP=$(curl -s http://checkip.amazonaws.com)
-            ;;
-        ${LAST_OPTION})
-            read -p "请输入要监听的IP地址: " NEW_IP
-            # 简单的IP地址格式验证
-            if ! [[ ${NEW_IP} =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && ! [[ ${NEW_IP} =~ ^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$ ]]; then
-                echo -e "${RED}无效的IP地址格式${RESET}"
-                return
-            fi
-            ;;
-        *)
-            if [ "${ip_choice}" -gt 2 ] && [ "${ip_choice}" -lt "${LAST_OPTION}" ]; then
-                # 获取选择的IP地址
-                local selected_ip=$(get_ip_by_option "${ip_choice}")
-                if [ ! -z "${selected_ip}" ]; then
-                    NEW_IP="${selected_ip}"
-                else
-                    echo -e "${RED}无效的选项${RESET}"
-                    return
-                fi
-            else
-                echo -e "${RED}无效的选项${RESET}"
-                return
-            fi
-            ;;
-    esac
+    if [ "${ip_choice}" = "${LAST_OPTION}" ]; then
+        read -p "请输入要监听的IP地址: " NEW_IP
+        # 简单的IP地址格式验证
+        if ! [[ ${NEW_IP} =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && ! [[ ${NEW_IP} =~ ^([0-9a-fA-F]{0,4}:){1,7}[0-9a-fA-F]{0,4}$ ]]; then
+            echo -e "${RED}无效的IP地址格式${RESET}"
+            return
+        fi
+    elif [ "${ip_choice}" -ge 1 ] 2>/dev/null && [ "${ip_choice}" -lt "${LAST_OPTION}" ] 2>/dev/null; then
+        local selected_ip=$(get_ip_by_option "${ip_choice}")
+        if [ ! -z "${selected_ip}" ]; then
+            NEW_IP="${selected_ip}"
+        else
+            echo -e "${RED}无效的选项${RESET}"
+            return
+        fi
+    else
+        echo -e "${RED}无效的选项${RESET}"
+        return
+    fi
+
+    if is_ipv6_address "${NEW_IP}" && [ "${IPV6_AVAILABLE}" != "true" ]; then
+        echo -e "${RED}当前环境未检测到公网 IPv6，无法切换到 IPv6 监听地址。${RESET}"
+        return
+    fi
+    if is_ipv6_address "${NEW_IP}" && [ "${NEW_IP}" != "::0" ] && ! is_public_ipv6_address "${NEW_IP}"; then
+        echo -e "${RED}请输入公网 IPv6 地址，或选择 ::0 监听所有 IPv6 地址。${RESET}"
+        return
+    fi
 
     # 获取当前端口号
-    CURRENT_PORT=$(grep "listen" "${CONF_FILE}" | grep -o '[0-9]\+$')
+    CURRENT_PORT=$(grep -m 1 "^listen = " "${CONF_FILE}" | grep -o '[0-9]\+$')
+    if [ -z "${CURRENT_PORT}" ]; then
+        echo -e "${RED}无法读取当前监听端口。${RESET}"
+        return
+    fi
 
     # 更新配置文件中的监听地址
-    sed -i "s/^listen = .*:/listen = ${NEW_IP}:/" "${CONF_FILE}"
+    sed -i "s|^listen = .*|listen = ${NEW_IP}:${CURRENT_PORT}|" "${CONF_FILE}"
     if [ $? -ne 0 ]; then
         echo -e "${RED}更新监听IP失败。${RESET}"
         return
+    fi
+
+    if is_ipv6_address "${NEW_IP}"; then
+        set_ipv6_config "true"
+    else
+        set_ipv6_config "false"
     fi
 
     # 重启服务以应用新配置
