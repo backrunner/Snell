@@ -1065,7 +1065,7 @@ while true; do
             manage_service
             ;;
         0)
-            echo -e "${GREEN}已退出 Snell${RESET}"
+            echo -e "${GREEN}已退出 Snell 管理脚本${RESET}"
             exit 0
             ;;
         *)
