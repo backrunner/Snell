@@ -282,7 +282,7 @@ service_status() {
     
     case "$init_system" in
         "systemd")
-            systemctl status snell
+            systemctl --no-pager --full status snell
             ;;
         "openrc")
             rc-service snell status
@@ -292,6 +292,116 @@ service_status() {
             return 1
             ;;
     esac
+}
+
+# 显示已安装服务的摘要状态
+show_service_overview() {
+    local init_system=$(detect_init_system)
+
+    case "$init_system" in
+        "systemd")
+            local active_state enabled_state service_state enabled_state_text
+
+            active_state=$(systemctl is-active snell 2>/dev/null)
+            enabled_state=$(systemctl is-enabled snell 2>/dev/null)
+
+            case "$active_state" in
+                "active")
+                    service_state="运行中"
+                    ;;
+                "inactive")
+                    service_state="已停止"
+                    ;;
+                "failed")
+                    service_state="已失败"
+                    ;;
+                "activating")
+                    service_state="启动中"
+                    ;;
+                "deactivating")
+                    service_state="停止中"
+                    ;;
+                *)
+                    service_state="${active_state:-未知}"
+                    ;;
+            esac
+
+            case "$enabled_state" in
+                "enabled")
+                    enabled_state_text="已启用"
+                    ;;
+                "disabled")
+                    enabled_state_text="未启用"
+                    ;;
+                "static")
+                    enabled_state_text="静态"
+                    ;;
+                *)
+                    enabled_state_text="${enabled_state:-未知}"
+                    ;;
+            esac
+
+            echo -e "${CYAN}服务状态：${RESET}${service_state}"
+            echo -e "${CYAN}开机自启：${RESET}${enabled_state_text}"
+            ;;
+        "openrc")
+            local rc_output rc_enabled_state
+
+            rc_output=$(rc-service snell status 2>&1)
+            if echo "${rc_output}" | grep -Eqi "started|run:|running"; then
+                echo -e "${CYAN}服务状态：${RESET}运行中"
+            elif echo "${rc_output}" | grep -Eqi "stopped|crashed|failed"; then
+                echo -e "${CYAN}服务状态：${RESET}已停止"
+            else
+                echo -e "${CYAN}服务状态：${RESET}${rc_output}"
+            fi
+
+            if command -v rc-update >/dev/null 2>&1 && rc-update show default 2>/dev/null | grep -q "snell"; then
+                rc_enabled_state="已启用"
+            else
+                rc_enabled_state="未启用"
+            fi
+            echo -e "${CYAN}开机自启：${RESET}${rc_enabled_state}"
+            ;;
+        *)
+            echo -e "${YELLOW}无法识别初始化系统，无法自动显示服务状态${RESET}"
+            ;;
+    esac
+}
+
+# 查看服务日志
+view_service_logs() {
+    local init_system=$(detect_init_system)
+
+    echo -e "${CYAN}=== Snell 日志 ===${RESET}"
+    case "$init_system" in
+        "systemd")
+            if command -v journalctl >/dev/null 2>&1; then
+                journalctl -u snell -n 100 --no-pager
+            elif [ -f /var/log/snell.log ]; then
+                tail -n 100 /var/log/snell.log
+            else
+                echo -e "${YELLOW}未找到可用日志来源。${RESET}"
+            fi
+            ;;
+        "openrc")
+            if [ -f /var/log/snell.log ]; then
+                tail -n 100 /var/log/snell.log
+            elif command -v journalctl >/dev/null 2>&1; then
+                journalctl -u snell -n 100 --no-pager
+            else
+                echo -e "${YELLOW}未找到可用日志文件 /var/log/snell.log。${RESET}"
+            fi
+            ;;
+        *)
+            if [ -f /var/log/snell.log ]; then
+                tail -n 100 /var/log/snell.log
+            else
+                echo -e "${YELLOW}不支持的初始化系统${RESET}"
+            fi
+            ;;
+    esac
+    echo -e "${CYAN}================${RESET}"
 }
 
 # 重载服务配置（支持 systemd 和 OpenRC）
@@ -458,6 +568,10 @@ install_snell() {
         apt update && apt install -y wget unzip curl iproute2 coreutils
     elif command -v apk &> /dev/null; then
         apk update && apk add --no-cache bash wget unzip curl iproute2 coreutils
+    elif command -v dnf &> /dev/null; then
+        dnf install -y wget unzip curl iproute2 coreutils
+    elif command -v yum &> /dev/null; then
+        yum install -y wget unzip curl iproute2 coreutils
     else
         echo -e "${RED}不支持的包管理器${RESET}"
         exit 1
@@ -962,10 +1076,11 @@ manage_service() {
         echo "2. 停止服务"
         echo "3. 重启服务"
         echo "4. 查看服务状态"
+        echo "5. 查看服务日志"
         echo "0. 返回主菜单"
         echo -e "${GREEN}==================${RESET}"
 
-        read -p "请选择操作 [0-4]: " service_choice
+        read -p "请选择操作 [0-5]: " service_choice
         echo ""
 
         case "${service_choice}" in
@@ -1001,6 +1116,10 @@ manage_service() {
                 service_status
                 read -p "按 enter 键继续..."
                 ;;
+            5)
+                view_service_logs
+                read -p "按 enter 键继续..."
+                ;;
             0)
                 return
                 ;;
@@ -1019,7 +1138,11 @@ show_menu() {
     snell_status=$?
     echo -e "${GREEN}=== Snell 管理工具 v${SCRIPT_VERSION} ===${RESET}"
     echo -e "${GREEN}当前状态: $(if [ ${snell_status} -eq 0 ]; then echo -e "${GREEN}已安装${RESET}"; else echo -e "${RED}未安装${RESET}"; fi)${RESET}"
-    echo -e "可安装版本: v5 (${SNELL_V5_VERSION}) / v6 (${SNELL_V6_VERSION})"
+    if [ ${snell_status} -eq 0 ]; then
+        show_service_overview
+    else
+        echo -e "可安装版本: v5 (${SNELL_V5_VERSION}) / v6 (${SNELL_V6_VERSION})"
+    fi
     echo "1. 安装 Snell"
     echo "2. 卸载 Snell"
     echo "3. 升级 Snell"
