@@ -658,6 +658,21 @@ set_ipv6_config() {
     fi
 }
 
+set_dns_config() {
+    local enable_ipv6="$1"
+    local dns_servers="1.1.1.1, 8.8.8.8"
+
+    if [ "${enable_ipv6}" = "true" ]; then
+        dns_servers="${dns_servers}, 2001:4860:4860::8888"
+    fi
+
+    if grep -q "^dns = " "${CONF_FILE}"; then
+        sed -i "s|^dns = .*|dns = ${dns_servers}|" "${CONF_FILE}"
+    else
+        sed -i "/^\\[snell-server\\]/a dns = ${dns_servers}" "${CONF_FILE}"
+    fi
+}
+
 # 安装 Snell（支持本地文件和在线下载）
 install_snell() {
     select_snell_version "安装"
@@ -748,11 +763,12 @@ install_snell() {
     # 创建配置文件
     cat > ${CONF_FILE} << EOF
 [snell-server]
-dns = 1.1.1.1, 8.8.8.8, 2001:4860:4860::8888
+dns = 1.1.1.1, 8.8.8.8
 listen = ${DEFAULT_LISTEN}
 psk = ${RANDOM_PSK}
 EOF
 
+    set_dns_config "${ENABLE_IPV6}"
     if [ "${ENABLE_IPV6}" = "true" ]; then
         echo "ipv6 = true" >> "${CONF_FILE}"
     fi
@@ -1142,8 +1158,10 @@ change_listen_ip() {
     fi
 
     if is_ipv6_address "${NEW_IP}"; then
+        set_dns_config "true"
         set_ipv6_config "true"
     else
+        set_dns_config "false"
         set_ipv6_config "false"
     fi
 
