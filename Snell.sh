@@ -51,6 +51,10 @@ ui_heading() {
     printf '%s\n' '────────────────────────────────────────'
 }
 
+ui_menu_item() {
+    printf '  %b[%s]%b  %s\n' "${CYAN}" "$1" "${RESET}" "$2"
+}
+
 pause_menu() {
     read -r -p "按 Enter 继续…" _pause || return 1
 }
@@ -598,10 +602,12 @@ select_snell_version() {
     local action_name="${1:-安装}" version_choice
     while true; do
         ui_heading "${action_name} · 选择版本"
-        printf '  1  Snell v5  %s\n' "${SNELL_V5_VERSION}"
-        printf '  2  Snell v6  %s · 正式版，推荐\n' "${SNELL_V6_VERSION}"
-        printf '  0  取消\n\n'
-        read_input "选择 [0-2，默认 2]: " version_choice || return 1
+        ui_menu_item 1 "Snell ${SNELL_V5_VERSION}"
+        ui_menu_item 2 "Snell ${SNELL_V6_VERSION} · 正式版，默认"
+        printf '\n'
+        ui_menu_item 0 "取消"
+        printf '\n'
+        read_input "请选择 [0-2，回车选择 v6]: " version_choice || return 1
         case "${version_choice}" in
             1) SNELL_VERSION="${SNELL_V5_VERSION}"; SNELL_PROTOCOL_VERSION="5"; return 0 ;;
             ""|2) SNELL_VERSION="${SNELL_V6_VERSION}"; SNELL_PROTOCOL_VERSION="6"; return 0 ;;
@@ -1306,13 +1312,14 @@ config_menu() {
     local config_choice=""
     while true; do
         ui_heading "配置管理"
-        echo "1. 显示当前配置"
-        echo "2. 重新生成 PSK"
-        echo "3. 重置端口"
-        echo "4. 修改监听IP"
-        echo "0. 返回主菜单"
-
-        read_input "请输入选项编号: " config_choice || return 1
+        ui_menu_item 1 "显示当前配置"
+        ui_menu_item 2 "重新生成 PSK"
+        ui_menu_item 3 "修改监听端口"
+        ui_menu_item 4 "修改监听 IP"
+        printf '\n'
+        ui_menu_item 0 "返回主菜单"
+        printf '\n'
+        read_input "请选择 [0-4]: " config_choice || return 1
         echo ""
 
         case "${config_choice}" in
@@ -1350,16 +1357,16 @@ manage_service() {
         ui_heading "服务管理"
         show_service_overview
         echo ""
-        echo "1. 启动服务"
-        echo "2. 停止服务"
-        echo "3. 重启服务"
-        echo "4. 查看服务状态"
-        echo "5. 查看服务日志"
-        echo "6. 前台诊断启动"
-        echo "0. 返回主菜单"
-
-
-        read_input "请选择操作 [0-6]: " service_choice || return 1
+        ui_menu_item 1 "启动服务"
+        ui_menu_item 2 "停止服务"
+        ui_menu_item 3 "重启服务"
+        ui_menu_item 4 "查看服务状态"
+        ui_menu_item 5 "查看服务日志"
+        ui_menu_item 6 "前台诊断启动"
+        printf '\n'
+        ui_menu_item 0 "返回主菜单"
+        printf '\n'
+        read_input "请选择 [0-6]: " service_choice || return 1
         echo ""
 
         case "${service_choice}" in
@@ -1415,19 +1422,30 @@ manage_service() {
 show_menu() {
     choice=""
     if [ -t 1 ] && [ "${TERM:-dumb}" != "dumb" ]; then clear; fi
-    ui_heading "Snell · 服务器管理"
-    printf '脚本 %s  ·  %s / %s\n\n' "$SCRIPT_VERSION" "$(uname -m)" "$(detect_init_system)"
+    ui_heading "Snell 服务器管理"
+    printf '脚本版本：%s\n' "$SCRIPT_VERSION"
+    printf '系统环境：%s / %s\n' "$(uname -m)" "$(detect_init_system)"
+    printf '\n'
     if check_snell_installed; then
-        printf '%b已安装  %s%b\n' "$GREEN" "$(get_installed_version)" "$RESET"
+        printf '当前版本：%b%s%b\n' "$GREEN" "$(get_installed_version)" "$RESET"
         show_service_overview
         if [ -f "$CONF_FILE" ]; then
             printf '监听地址：%s\n' "$(sed -n 's/^listen = //p' "$CONF_FILE" | head -n 1)"
         fi
     else
-        printf '%b尚未安装%b  ·  推荐 Snell %s 正式版\n' "$YELLOW" "$RESET" "$SNELL_V6_VERSION"
+        printf '安装状态：%b尚未安装%b\n' "$YELLOW" "$RESET"
+        printf '默认版本：Snell %s 正式版\n' "$SNELL_V6_VERSION"
     fi
-    printf '\n  部署\n    1  安装 Snell        3  升级版本\n    2  卸载 Snell\n\n  管理\n    4  配置管理          5  服务管理\n\n    0  退出\n\n'
-    read_input "选择 [0-5]: " choice || return 1
+    printf '\n'
+    ui_menu_item 1 "安装 Snell"
+    ui_menu_item 2 "卸载 Snell"
+    ui_menu_item 3 "升级 Snell"
+    ui_menu_item 4 "配置管理"
+    ui_menu_item 5 "服务管理"
+    printf '\n'
+    ui_menu_item 0 "退出"
+    printf '\n'
+    read_input "请选择 [0-5]: " choice || return 1
     echo ""
 }
 
